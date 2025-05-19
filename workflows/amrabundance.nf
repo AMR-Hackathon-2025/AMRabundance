@@ -3,7 +3,9 @@
     IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-include { FASTQC                 } from '../modules/nf-core/fastqc/main'
+include { UNTAR                  } from '../modules/nf-core/untar/main'
+include { MINIMAP2_ALIGNMENT     } from '../subworkflows/local/minimap2_alignment/main'
+include { HTSBOX_PILEUP          } from '../modules/local/htsbox/main'
 include { MULTIQC                } from '../modules/nf-core/multiqc/main'
 include { paramsSummaryMap       } from 'plugin/nf-schema'
 include { paramsSummaryMultiqc   } from '../subworkflows/nf-core/utils_nfcore_pipeline'
@@ -20,18 +22,63 @@ workflow AMRABUNDANCE {
 
     take:
     ch_samplesheet // channel: samplesheet read in from --input
+    
     main:
-
-    ch_versions = Channel.empty()
+    ch_ref_data      = Channel.empty()
+    ch_versions      = Channel.empty()
     ch_multiqc_files = Channel.empty()
+    
+    if(params.card_dir){
+
+        // *****************************************
+        // Get the structures into a channel.
+        // If the folder is compressed, decompress
+        // *****************************************
+        if(params.card_dir.endsWith('.tar.gz')){
+
+            card_dir = Channel.fromPath(params.card_dir)
+                                        .map { it -> [[id: it.baseName],it] }
+
+            UNTAR (card_dir)
+                .untar
+                .map { meta, dir -> [ file(dir).listFiles() ] }
+                .flatten()
+                .set{ refs_to_be_mapped }
+            ch_versions = ch_versions.mix(UNTAR.out.versions)
+
+        }
+        // otherwise, directly use the optional_data within the folder
+        else {
+            refs_to_be_mapped = Channel.fromPath(params.card_dir+"/**")
+        }
+    }
+
+    //refs_to_be_mapped.view {i -> i}
+    
+    refs_to_be_mapped
+        .map { it -> [ [ id: it.baseName ], it ] }
+        .map { id, seq_id -> [ id, seq_id ] }
+        .groupTuple(by: 0)
+        .set { ch_ref_data }
+        
+    //ch_ref_data.view {t -> t}
     //
-    // MODULE: Run FastQC
+    // MODULE: Run Minimap2
     //
-    FASTQC (
+    MINIMAP2_ALIGNMENT (
+        ch_ref_data,
         ch_samplesheet
     )
-    ch_multiqc_files = ch_multiqc_files.mix(FASTQC.out.zip.collect{it[1]})
-    ch_versions = ch_versions.mix(FASTQC.out.versions.first())
+    ch_versions = ch_versions.mix(MINIMAP2_ALIGNMENT.out.versions.first())
+
+    //
+    // MODULE: Run htsbox pileup
+    //
+    // HTSBOX_PILEUP (
+    //     MINIMAP2_ALIGNMENT.out.minimap_align,
+    //     refs_to_be_mapped
+    // )
+    // ch_versions = ch_versions.mix(HTSBOX_PILEUP.out.versions.first())
 
     //
     // Collate and save software versions
