@@ -11,6 +11,7 @@ process HTSBOX_PILEUP {
     input:
     tuple val(meta), path(bam)
     tuple val(meta2), path(reference)
+    tuple val(meta3), path(fai)
 
     output:
     tuple val(meta), path("*.vcf")                       , optional: true, emit: vcf
@@ -21,34 +22,17 @@ process HTSBOX_PILEUP {
 
     script:
     def args  = task.ext.args ?: ''
+    def prefix = task.ext.prefix ?: "${meta.id}"
     def htsbox_version = 'r346'
     """
     htsbox pileup \\
         $args \\
-        -t $task.cpus \\
         -f $reference \\
-        $bam
+        $bam > ${prefix}.vcf
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         htsbox: ${htsbox_version}
-    END_VERSIONS
-    """
-
-    stub:
-    def prefix = task.ext.prefix ?: "${meta.id}"
-    def output_file = bam_format ? "${prefix}.bam" : "${prefix}.paf"
-    def bam_index = bam_index_extension ? "touch ${prefix}.bam.${bam_index_extension}" : ""
-    def bam_input = "${reads.extension}".matches('sam|bam|cram')
-    def target = reference ?: (bam_input ? error("BAM input requires reference") : reads)
-
-    """
-    touch $output_file
-    ${bam_index}
-
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        minimap2: \$(minimap2 --version 2>&1)
     END_VERSIONS
     """
 }

@@ -25,7 +25,8 @@ workflow MINIMAP2_ALIGNMENT {
         }
         .set { ch_mapping_input }
 
-    MINIMAP2_ALIGN ( ch_mapping_input.reads, ch_mapping_input.index, params.bam_format, params.bam_index_extension, params.cigar_paf_format, params.cigar_bam )
+    MINIMAP2_ALIGN ( ch_fasta, MINIMAP2_INDEX.out.index, params.bam_format, params.bam_index_extension, params.cigar_paf_format, params.cigar_bam )
+    // MINIMAP2_ALIGN ( ch_mapping_input.reads, ch_mapping_input.index, params.bam_format, params.bam_index_extension, params.cigar_paf_format, params.cigar_bam )
     ch_versions = ch_versions.mix(MINIMAP2_ALIGN.out.versions)
 
     if (params.bam_format) {

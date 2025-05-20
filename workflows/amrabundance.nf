@@ -3,14 +3,19 @@
     IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-include { UNTAR                  } from '../modules/nf-core/untar/main'
-include { MINIMAP2_ALIGNMENT     } from '../subworkflows/local/minimap2_alignment/main'
-include { HTSBOX_PILEUP          } from '../modules/local/htsbox/main'
-include { MULTIQC                } from '../modules/nf-core/multiqc/main'
-include { paramsSummaryMap       } from 'plugin/nf-schema'
-include { paramsSummaryMultiqc   } from '../subworkflows/nf-core/utils_nfcore_pipeline'
-include { softwareVersionsToYAML } from '../subworkflows/nf-core/utils_nfcore_pipeline'
-include { methodsDescriptionText } from '../subworkflows/local/utils_nfcore_amrabundance_pipeline'
+include { UNTAR                                 } from '../modules/nf-core/untar/main'
+include { SAMTOOLS_FAIDX                        } from '../modules/nf-core/samtools/faidx/main'
+include { MINIMAP2_ALIGNMENT                    } from '../subworkflows/local/minimap2_alignment/main'
+include { SAMTOOLS_DEPTH                        } from '../modules/nf-core/samtools/depth/main'
+include { PRESENCE_ABSENCE                      } from '../modules/local/calc_presence_absence/main'
+include { PRESENCE_ABSENCE_PARSE                } from '../modules/local/calc_presence_absence_parse/main'
+include { HTSBOX_PILEUP as HTSBOX_PILEUP_VCF    } from '../modules/local/htsbox/main'
+include { HTSBOX_PILEUP as HTSBOX_PILEUP_PILEUP } from '../modules/local/htsbox/main'
+include { MULTIQC                               } from '../modules/nf-core/multiqc/main'
+include { paramsSummaryMap                      } from 'plugin/nf-schema'
+include { paramsSummaryMultiqc                  } from '../subworkflows/nf-core/utils_nfcore_pipeline'
+include { softwareVersionsToYAML                } from '../subworkflows/nf-core/utils_nfcore_pipeline'
+include { methodsDescriptionText                } from '../subworkflows/local/utils_nfcore_amrabundance_pipeline'
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -22,6 +27,7 @@ workflow AMRABUNDANCE {
 
     take:
     ch_samplesheet // channel: samplesheet read in from --input
+    ch_fasta      // channel: fasta read in from --fasta
     
     main:
     ch_ref_data      = Channel.empty()
@@ -62,23 +68,103 @@ workflow AMRABUNDANCE {
         .set { ch_ref_data }
         
     //ch_ref_data.view {t -> t}
+    
+    SAMTOOLS_FAIDX (
+        ch_fasta,
+        [ [ id:'no_fai' ],[] ],
+        true
+    )
+    ch_versions = ch_versions.mix( SAMTOOLS_FAIDX.out.versions )
     //
     // MODULE: Run Minimap2
     //
     MINIMAP2_ALIGNMENT (
-        ch_ref_data,
+        ch_fasta,
+        // ch_ref_data,
         ch_samplesheet
     )
-    ch_versions = ch_versions.mix(MINIMAP2_ALIGNMENT.out.versions.first())
+    ch_bam_samtools = MINIMAP2_ALIGNMENT.out.minimap_align
+    ch_bam_htsbox   = MINIMAP2_ALIGNMENT.out.minimap_align
+    ch_versions     = ch_versions.mix(MINIMAP2_ALIGNMENT.out.versions.first())
+    //ch_bam_samtools.view {i -> i}
+    //
+    // MODULE: Run SAMtools depth
+    // 
+    ch_bam_samtools
+        .map { id, bam -> [ bam ] }
+        .map { it -> [ [ id: it.baseName[0] ], it ] }
+        .set { ch_samtools_depth }
+    
+    //ch_samtools_depth.view {i -> i}
+    
+    SAMTOOLS_DEPTH (
+        ch_bam_samtools,
+        // ch_samtools_depth,
+        [ [:], [] ]
+    )
+    ch_versions = ch_versions.mix(SAMTOOLS_DEPTH.out.versions.first())
+    
+    PRESENCE_ABSENCE (
+        SAMTOOLS_DEPTH.out.tsv,
+        params.fasta_lengths,
+        params.depth_threshold
+    )
+    ch_versions = ch_versions.mix(PRESENCE_ABSENCE.out.versions.first())
+    
+    /*
+        MODULE: Summarise presence/absence outputs
+    */
+    PRESENCE_ABSENCE_PARSE (
+        PRESENCE_ABSENCE.out.tsv.collect{it[1]}.ifEmpty([])
+    )
+    ch_versions = ch_versions.mix(PRESENCE_ABSENCE_PARSE.out.versions)
+    
+    // ch_bam_htsbox
+    //     .map { it -> [ [ id: it.baseName.split("_")[0] ], it ] }
+    //     //.map { id -> [ [ ref: id.baseName.split("_")[0] ] ]}
+    //     .set { ch_htsbox_input }
+    
+    // ch_htsbox_input.view {i -> i}
 
+//     ch_samtools_depth
+//         .map { id, bam -> [tokens: id.tokenize("_") ]}
+//         .set { ch_samtools_depth_htsbox }
+    
+//     map { id, reads ->
+//     (sample, replicate, type) = id.tokenize("_")
+//     meta = [sample:sample, replicate:replicate, type:type]
+//     [meta, reads]
+// }
+    
+//     ch_samtools_depth_htsbox.view {i -> i}
+
+//     ch_ref_data
+//         .combine(ch_bam_htsbox)
+//         // .multiMap { ref_id, ref, meta, bam ->
+//         //    refs: [ref_id, ref]
+//         //    bam: [meta, bam]
+//         // }
+//         .set { ch_htsbox_input }
+    
+    //ch_htsbox_input.view {i -> i}
     //
     // MODULE: Run htsbox pileup
     //
-    // HTSBOX_PILEUP (
-    //     MINIMAP2_ALIGNMENT.out.minimap_align,
-    //     refs_to_be_mapped
-    // )
-    // ch_versions = ch_versions.mix(HTSBOX_PILEUP.out.versions.first())
+    HTSBOX_PILEUP_VCF (
+        ch_bam_samtools,
+        // ch_samtools_depth,
+        ch_fasta,
+        SAMTOOLS_FAIDX.out.fai
+    )
+    ch_versions = ch_versions.mix(HTSBOX_PILEUP_VCF.out.versions.first())
+
+    HTSBOX_PILEUP_PILEUP (
+        ch_bam_samtools,
+        // ch_samtools_depth,
+        ch_fasta,
+        SAMTOOLS_FAIDX.out.fai
+    )
+    ch_versions = ch_versions.mix(HTSBOX_PILEUP_VCF.out.versions.first())
 
     //
     // Collate and save software versions

@@ -239,6 +239,13 @@
         "cigar_bam": {
             "type": "boolean",
             "default": true
+        },
+        "fasta_lengths": {
+            "type": "string"
+        },
+        "depth_threshold": {
+            "type": "integer",
+            "default": 10
         }
     }
 }
